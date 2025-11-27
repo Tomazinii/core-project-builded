@@ -1,0 +1,41 @@
+services:
+  app:
+    build: .
+    container_name: backend_core_builder
+    image: backend_core_builder
+    volumes:
+      - .:/home/python/app
+    tty: true
+    ports:
+      - "8001:8001"
+    networks:
+      - my_network
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: ankane/pgvector
+    container_name: postgres_core_builder
+    environment:
+      - POSTGRES_DB=mydatabase
+      - POSTGRES_USER=myuser
+      - POSTGRES_PASSWORD=mypassword
+    ports:
+      - "5434:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - my_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U myuser -d mydatabase"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+networks:
+  my_network:
+    driver: bridge
+
+volumes:
+  postgres_data:
