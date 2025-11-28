@@ -11,25 +11,25 @@ class OrganizationRepository(ABC):
     """Contrato de persistência para a entidade Organization."""
     
     @abstractmethod
-    def create_organization(self, organization: Organization) -> Organization:
+    async def create_organization(self, organization: Organization) -> Organization:
         pass
     
     @abstractmethod
-    def update_organization(self, organization: Organization) -> bool:
+    async def update_organization(self, organization: Organization) -> bool:
         pass
     
     @abstractmethod
-    def delete_organization(self, organization_id: OrganizationId) -> bool:
+    async def delete_organization(self, organization_id: OrganizationId) -> bool:
         pass
     
     @abstractmethod
-    def get_organization_by_id(self, organization_id: OrganizationId) -> Optional[Organization]:
+    async def get_organization_by_id(self, organization_id: OrganizationId) -> Optional[Organization]:
         pass
     
     @abstractmethod
-    def get_organization_by_slug(self, slug: Slug) -> Optional[Organization]:
+    async def get_organization_by_slug(self, slug: Slug) -> Optional[Organization]:
         pass
     
     @abstractmethod
-    def list_organizations_by_type(self, organization_type: OrganizationType) -> List[Organization]:
+    async def list_organizations_by_type(self, organization_type: OrganizationType) -> List[Organization]:
         pass

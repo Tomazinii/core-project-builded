@@ -5,9 +5,6 @@
 from dataclasses import dataclass
 from typing import Optional, List, Dict, Any
 from datetime import datetime
-from src.domain.entities.organization import (
-    OrganizationType,
-)
 
 @dataclass(frozen=True)
 class CreateOrganizationInputDTO:
@@ -65,8 +62,8 @@ class OrganizationOutputDTO:
 # USE CASES
 # =============================================================================
 
-from src.application.use_cases._base import UseCase
-from src.domain.repositories.organization_repository_interface import OrganizationRepository
+from src.application.usecases._base import UseCase
+from src.domain.repository.organization_repository_interface import OrganizationRepository
 from src.domain.entities.organization import (
     Organization,
     OrganizationId,
@@ -74,25 +71,24 @@ from src.domain.entities.organization import (
     OrganizationName,
     Logo,
     ACLId,
+    OrganizationType,
 )
+from src.shared.exceptions import DomainException
 
 class CreateOrganizationUseCase(UseCase[OrganizationRepository, CreateOrganizationInputDTO, OrganizationOutputDTO]):
     """Caso de uso para criar uma nova organização"""
     
     async def execute(self, input_dto: CreateOrganizationInputDTO) -> OrganizationOutputDTO:
         try:
-            organization_type = OrganizationType(input_dto.organization_type)
-        except ValueError:
-            return self._create_error_output([f"Tipo de organização inválido: {input_dto.organization_type}"])
-        
-        try:
+            # Instancia value objects separadamente
+            organization_id = OrganizationId()
             slug = Slug(input_dto.slug)
             name = OrganizationName(input_dto.name)
+            organization_type = OrganizationType(input_dto.organization_type)
             logo = Logo(input_dto.logo) if input_dto.logo else None
             acl_id = ACLId(input_dto.acl_id) if input_dto.acl_id else None
             
-            organization_id = OrganizationId.generate()
-            
+            # Cria a organização
             organization = Organization(
                 id=organization_id,
                 slug=slug,
@@ -102,99 +98,104 @@ class CreateOrganizationUseCase(UseCase[OrganizationRepository, CreateOrganizati
                 acl_id=acl_id
             )
             
-            errors = self._get_errors(organization)
-            if errors:
-                return self._create_error_output(errors)
+            # Valida a entidade e lança exceção se houver erros
+            if organization.get_validation_errors():
+                raise DomainException(organization.get_validation_errors())
             
-            existing_org = self.repository.get_organization_by_slug(slug)
+            # Validação de negócio: slug único (depende de infraestrutura)
+            existing_org = await self._repository.get_organization_by_slug(slug)
             if existing_org:
-                return self._create_error_output(["Slug já está em uso por outra organização"])
+                raise DomainException(["Slug já está em uso por outra organização"])
             
-            created_org = self.repository.create_organization(organization)
+            # Persiste a organização
+            created_org = await self._repository.create_organization(organization)
             
             return OrganizationOutputDTO(
                 success=True,
                 data={
-                    'id': str(created_org.id),
-                    'slug': created_org.slug,
-                    'name': created_org.name,
-                    'organization_type': created_org.organization_type,
-                    'logo': created_org.logo,
-                    'acl_id': created_org.acl_id,
+                    'id': str(created_org.id.value),
+                    'slug': created_org.slug.value,
+                    'name': created_org.name.value,
+                    'organization_type': created_org.organization_type.value,
+                    'logo': created_org.logo.value if created_org.logo else None,
+                    'acl_id': str(created_org.acl_id.value) if created_org.acl_id else None,
                     'created_at': created_org.created_at.isoformat() if created_org.created_at else None,
                     'updated_at': created_org.updated_at.isoformat() if created_org.updated_at else None
                 }
             )
             
-        except ValueError as e:
-            return self._create_error_output([str(e)])
+        except DomainException as e:
+            return OrganizationOutputDTO(
+                success=False,
+                errors=e.errors
+            )
         except Exception as e:
-            return self._create_error_output([f"Erro ao criar organização: {str(e)}"])
+            return OrganizationOutputDTO(
+                success=False,
+                errors=[f"Erro ao criar organização: {str(e)}"]
+            )
 
 class UpdateOrganizationUseCase(UseCase[OrganizationRepository, UpdateOrganizationInputDTO, OrganizationOutputDTO]):
     """Caso de uso para atualizar uma organização"""
     
     async def execute(self, input_dto: UpdateOrganizationInputDTO) -> OrganizationOutputDTO:
-        organization_id = self._validate_uuid(input_dto.id, "ID da organização")
-        if not organization_id:
-            return self._create_error_output(["ID da organização inválido"])
-        
         try:
-            org_id = OrganizationId(organization_id)
-            existing_org_dto = self.repository.get_organization_by_id(org_id)
+            # Instancia ID
+            org_id = OrganizationId(input_dto.id)
+            
+            # Busca organização existente
+            existing_org_dto = await self._repository.get_organization_by_id(org_id)
             
             if not existing_org_dto:
-                return self._create_error_output(["Organização não encontrada"])
+                raise DomainException(["Organização não encontrada"])
             
-            try:
-                organization_type = OrganizationType(existing_org_dto.organization_type)
-            except ValueError:
-                return self._create_error_output([f"Tipo de organização inválido: {existing_org_dto.organization_type}"])
+            # Instancia value objects da organização existente
+            existing_id = OrganizationId(existing_org_dto.id)
+            existing_slug = Slug(existing_org_dto.slug)
+            existing_name = OrganizationName(existing_org_dto.name)
+            existing_type = OrganizationType(existing_org_dto.organization_type)
+            existing_logo = Logo(existing_org_dto.logo) if existing_org_dto.logo else None
+            existing_acl_id = ACLId(existing_org_dto.acl_id) if existing_org_dto.acl_id else None
             
+            # Reconstrói a entidade
             organization = Organization(
-                id=OrganizationId(existing_org_dto.id),
-                slug=Slug(existing_org_dto.slug),
-                name=OrganizationName(existing_org_dto.name),
-                organization_type=organization_type,
-                logo=Logo(existing_org_dto.logo) if existing_org_dto.logo else None,
-                acl_id=ACLId(existing_org_dto.acl_id) if existing_org_dto.acl_id else None,
+                id=existing_id,
+                slug=existing_slug,
+                name=existing_name,
+                organization_type=existing_type,
+                logo=existing_logo,
+                acl_id=existing_acl_id,
                 created_at=existing_org_dto.created_at,
                 updated_at=existing_org_dto.updated_at
             )
             
+            # Aplica as alterações através dos métodos da entidade
             if input_dto.name:
-                try:
-                    new_name = OrganizationName(input_dto.name)
-                    organization.update_name(new_name)
-                except ValueError as e:
-                    return self._create_error_output([str(e)])
+                new_name = OrganizationName(input_dto.name)
+                organization.update_name(new_name)
             
             if input_dto.logo:
-                try:
-                    new_logo = Logo(input_dto.logo)
-                    organization.update_logo(new_logo)
-                except ValueError as e:
-                    return self._create_error_output([str(e)])
+                new_logo = Logo(input_dto.logo)
+                organization.update_logo(new_logo)
             
             if input_dto.acl_id:
-                try:
-                    new_acl_id = ACLId(input_dto.acl_id)
-                    if organization.has_acl():
-                        organization.remove_acl()
-                    organization.assign_acl(new_acl_id)
-                except ValueError as e:
-                    return self._create_error_output([str(e)])
+                new_acl_id = ACLId(input_dto.acl_id)
+                if organization.has_acl():
+                    organization.remove_acl()
+                organization.assign_acl(new_acl_id)
             
-            errors = self._get_errors(organization)
-            if errors:
-                return self._create_error_output(errors)
+            # Valida a entidade após as alterações
+            if organization.get_validation_errors():
+                raise DomainException(organization.get_validation_errors())
             
-            success = self.repository.update_organization(organization)
+            # Persiste as alterações
+            success = await self._repository.update_organization(organization)
             
             if not success:
-                return self._create_error_output(["Falha ao atualizar organização"])
+                raise DomainException(["Falha ao atualizar organização"])
             
-            updated_org = self.repository.get_organization_by_id(org_id)
+            # Busca organização atualizada
+            updated_org = await self._repository.get_organization_by_id(org_id)
             
             return OrganizationOutputDTO(
                 success=True,
@@ -210,51 +211,66 @@ class UpdateOrganizationUseCase(UseCase[OrganizationRepository, UpdateOrganizati
                 }
             )
             
+        except DomainException as e:
+            return OrganizationOutputDTO(
+                success=False,
+                errors=e.errors
+            )
         except Exception as e:
-            return self._create_error_output([f"Erro ao atualizar organização: {str(e)}"])
+            return OrganizationOutputDTO(
+                success=False,
+                errors=[f"Erro ao atualizar organização: {str(e)}"]
+            )
 
 class DeleteOrganizationUseCase(UseCase[OrganizationRepository, DeleteOrganizationInputDTO, OrganizationOutputDTO]):
     """Caso de uso para deletar uma organização"""
     
     async def execute(self, input_dto: DeleteOrganizationInputDTO) -> OrganizationOutputDTO:
-        organization_id = self._validate_uuid(input_dto.id, "ID da organização")
-        if not organization_id:
-            return self._create_error_output(["ID da organização inválido"])
-        
         try:
-            org_id = OrganizationId(organization_id)
-            existing_org = self.repository.get_organization_by_id(org_id)
+            # Instancia ID
+            org_id = OrganizationId(input_dto.id)
+            
+            # Busca organização
+            existing_org = await self._repository.get_organization_by_id(org_id)
             
             if not existing_org:
-                return self._create_error_output(["Organização não encontrada"])
+                raise DomainException(["Organização não encontrada"])
             
-            success = self.repository.delete_organization(org_id)
+            # Deleta organização
+            success = await self._repository.delete_organization(org_id)
             
             if not success:
-                return self._create_error_output(["Falha ao deletar organização"])
+                raise DomainException(["Falha ao deletar organização"])
             
             return OrganizationOutputDTO(
                 success=True,
                 data={'id': input_dto.id, 'message': 'Organização deletada com sucesso'}
             )
             
+        except DomainException as e:
+            return OrganizationOutputDTO(
+                success=False,
+                errors=e.errors
+            )
         except Exception as e:
-            return self._create_error_output([f"Erro ao deletar organização: {str(e)}"])
+            return OrganizationOutputDTO(
+                success=False,
+                errors=[f"Erro ao deletar organização: {str(e)}"]
+            )
 
 class GetOrganizationByIdUseCase(UseCase[OrganizationRepository, GetOrganizationByIdInputDTO, OrganizationOutputDTO]):
     """Caso de uso para buscar organização por ID"""
     
     async def execute(self, input_dto: GetOrganizationByIdInputDTO) -> OrganizationOutputDTO:
-        organization_id = self._validate_uuid(input_dto.id, "ID da organização")
-        if not organization_id:
-            return self._create_error_output(["ID da organização inválido"])
-        
         try:
-            org_id = OrganizationId(organization_id)
-            organization = self.repository.get_organization_by_id(org_id)
+            # Instancia ID
+            org_id = OrganizationId(input_dto.id)
+            
+            # Busca organização
+            organization = await self._repository.get_organization_by_id(org_id)
             
             if not organization:
-                return self._create_error_output(["Organização não encontrada"])
+                raise DomainException(["Organização não encontrada"])
             
             return OrganizationOutputDTO(
                 success=True,
@@ -270,19 +286,34 @@ class GetOrganizationByIdUseCase(UseCase[OrganizationRepository, GetOrganization
                 }
             )
             
+        except DomainException as e:
+            return OrganizationOutputDTO(
+                success=False,
+                errors=e.errors
+            )
         except Exception as e:
-            return self._create_error_output([f"Erro ao buscar organização: {str(e)}"])
+            return OrganizationOutputDTO(
+                success=False,
+                errors=[f"Erro ao buscar organização: {str(e)}"]
+            )
 
 class GetOrganizationBySlugUseCase(UseCase[OrganizationRepository, GetOrganizationBySlugInputDTO, OrganizationOutputDTO]):
     """Caso de uso para buscar organização por slug"""
     
     async def execute(self, input_dto: GetOrganizationBySlugInputDTO) -> OrganizationOutputDTO:
         try:
+            # Instancia Slug
             slug = Slug(input_dto.slug)
-            organization = self.repository.get_organization_by_slug(slug)
+            
+            # Valida o value object
+            if slug.get_validation_errors():
+                raise DomainException(slug.get_validation_errors())
+            
+            # Busca organização
+            organization = await self._repository.get_organization_by_slug(slug)
             
             if not organization:
-                return self._create_error_output(["Organização não encontrada"])
+                raise DomainException(["Organização não encontrada"])
             
             return OrganizationOutputDTO(
                 success=True,
@@ -298,10 +329,16 @@ class GetOrganizationBySlugUseCase(UseCase[OrganizationRepository, GetOrganizati
                 }
             )
             
-        except ValueError as e:
-            return self._create_error_output([str(e)])
+        except DomainException as e:
+            return OrganizationOutputDTO(
+                success=False,
+                errors=e.errors
+            )
         except Exception as e:
-            return self._create_error_output([f"Erro ao buscar organização: {str(e)}"])
+            return OrganizationOutputDTO(
+                success=False,
+                errors=[f"Erro ao buscar organização: {str(e)}"]
+            )
 
 class ListOrganizationsUseCase(UseCase[OrganizationRepository, ListOrganizationsInputDTO, OrganizationOutputDTO]):
     """Caso de uso para listar organizações"""
@@ -309,14 +346,16 @@ class ListOrganizationsUseCase(UseCase[OrganizationRepository, ListOrganizations
     async def execute(self, input_dto: ListOrganizationsInputDTO) -> OrganizationOutputDTO:
         try:
             if input_dto.organization_type:
-                try:
-                    org_type = OrganizationType(input_dto.organization_type)
-                    organizations = self.repository.list_organizations_by_type(org_type)
-                except ValueError:
-                    return self._create_error_output([f"Tipo de organização inválido: {input_dto.organization_type}"])
+                # Instancia tipo de organização
+                org_type = OrganizationType(input_dto.organization_type)
+                organizations = await self._repository.list_organizations_by_type(org_type)
             else:
-                personal_orgs = self.repository.list_organizations_by_type(OrganizationType.PERSONAL)
-                enterprise_orgs = self.repository.list_organizations_by_type(OrganizationType.ENTERPRISE)
+                # Lista todos os tipos
+                personal_type = OrganizationType.PERSONAL
+                enterprise_type = OrganizationType.ENTERPRISE
+                
+                personal_orgs = await self._repository.list_organizations_by_type(personal_type)
+                enterprise_orgs = await self._repository.list_organizations_by_type(enterprise_type)
                 organizations = personal_orgs + enterprise_orgs
             
             organizations_data = [
@@ -341,56 +380,67 @@ class ListOrganizationsUseCase(UseCase[OrganizationRepository, ListOrganizations
                 }
             )
             
+        except DomainException as e:
+            return OrganizationOutputDTO(
+                success=False,
+                errors=e.errors
+            )
         except Exception as e:
-            return self._create_error_output([f"Erro ao listar organizações: {str(e)}"])
+            return OrganizationOutputDTO(
+                success=False,
+                errors=[f"Erro ao listar organizações: {str(e)}"]
+            )
 
 class UpdateOrganizationLogoUseCase(UseCase[OrganizationRepository, UpdateOrganizationLogoInputDTO, OrganizationOutputDTO]):
     """Caso de uso para atualizar logo de uma organização"""
     
     async def execute(self, input_dto: UpdateOrganizationLogoInputDTO) -> OrganizationOutputDTO:
-        organization_id = self._validate_uuid(input_dto.id, "ID da organização")
-        if not organization_id:
-            return self._create_error_output(["ID da organização inválido"])
-        
         try:
-            org_id = OrganizationId(organization_id)
-            existing_org_dto = self.repository.get_organization_by_id(org_id)
+            # Instancia ID
+            org_id = OrganizationId(input_dto.id)
+            
+            # Busca organização existente
+            existing_org_dto = await self._repository.get_organization_by_id(org_id)
             
             if not existing_org_dto:
-                return self._create_error_output(["Organização não encontrada"])
+                raise DomainException(["Organização não encontrada"])
             
-            try:
-                organization_type = OrganizationType(existing_org_dto.organization_type)
-            except ValueError:
-                return self._create_error_output([f"Tipo de organização inválido: {existing_org_dto.organization_type}"])
+            # Instancia value objects da organização existente
+            existing_id = OrganizationId(existing_org_dto.id)
+            existing_slug = Slug(existing_org_dto.slug)
+            existing_name = OrganizationName(existing_org_dto.name)
+            existing_type = OrganizationType(existing_org_dto.organization_type)
+            existing_logo = Logo(existing_org_dto.logo) if existing_org_dto.logo else None
+            existing_acl_id = ACLId(existing_org_dto.acl_id) if existing_org_dto.acl_id else None
             
+            # Reconstrói a entidade
             organization = Organization(
-                id=OrganizationId(existing_org_dto.id),
-                slug=Slug(existing_org_dto.slug),
-                name=OrganizationName(existing_org_dto.name),
-                organization_type=organization_type,
-                logo=Logo(existing_org_dto.logo) if existing_org_dto.logo else None,
-                acl_id=ACLId(existing_org_dto.acl_id) if existing_org_dto.acl_id else None,
+                id=existing_id,
+                slug=existing_slug,
+                name=existing_name,
+                organization_type=existing_type,
+                logo=existing_logo,
+                acl_id=existing_acl_id,
                 created_at=existing_org_dto.created_at,
                 updated_at=existing_org_dto.updated_at
             )
             
-            try:
-                new_logo = Logo(input_dto.logo)
-                organization.update_logo(new_logo)
-            except ValueError as e:
-                return self._create_error_output([str(e)])
+            # Atualiza logo
+            new_logo = Logo(input_dto.logo)
+            organization.update_logo(new_logo)
             
-            errors = self._get_errors(organization)
-            if errors:
-                return self._create_error_output(errors)
+            # Valida a entidade
+            if organization.get_validation_errors():
+                raise DomainException(organization.get_validation_errors())
             
-            success = self.repository.update_organization(organization)
+            # Persiste
+            success = await self._repository.update_organization(organization)
             
             if not success:
-                return self._create_error_output(["Falha ao atualizar logo da organização"])
+                raise DomainException(["Falha ao atualizar logo da organização"])
             
-            updated_org = self.repository.get_organization_by_id(org_id)
+            # Busca organização atualizada
+            updated_org = await self._repository.get_organization_by_id(org_id)
             
             return OrganizationOutputDTO(
                 success=True,
@@ -406,56 +456,67 @@ class UpdateOrganizationLogoUseCase(UseCase[OrganizationRepository, UpdateOrgani
                 }
             )
             
+        except DomainException as e:
+            return OrganizationOutputDTO(
+                success=False,
+                errors=e.errors
+            )
         except Exception as e:
-            return self._create_error_output([f"Erro ao atualizar logo: {str(e)}"])
+            return OrganizationOutputDTO(
+                success=False,
+                errors=[f"Erro ao atualizar logo: {str(e)}"]
+            )
 
 class UpdateOrganizationNameUseCase(UseCase[OrganizationRepository, UpdateOrganizationNameInputDTO, OrganizationOutputDTO]):
     """Caso de uso para atualizar nome de uma organização"""
     
     async def execute(self, input_dto: UpdateOrganizationNameInputDTO) -> OrganizationOutputDTO:
-        organization_id = self._validate_uuid(input_dto.id, "ID da organização")
-        if not organization_id:
-            return self._create_error_output(["ID da organização inválido"])
-        
         try:
-            org_id = OrganizationId(organization_id)
-            existing_org_dto = self.repository.get_organization_by_id(org_id)
+            # Instancia ID
+            org_id = OrganizationId(input_dto.id)
+            
+            # Busca organização existente
+            existing_org_dto = await self._repository.get_organization_by_id(org_id)
             
             if not existing_org_dto:
-                return self._create_error_output(["Organização não encontrada"])
+                raise DomainException(["Organização não encontrada"])
             
-            try:
-                organization_type = OrganizationType(existing_org_dto.organization_type)
-            except ValueError:
-                return self._create_error_output([f"Tipo de organização inválido: {existing_org_dto.organization_type}"])
+            # Instancia value objects da organização existente
+            existing_id = OrganizationId(existing_org_dto.id)
+            existing_slug = Slug(existing_org_dto.slug)
+            existing_name = OrganizationName(existing_org_dto.name)
+            existing_type = OrganizationType(existing_org_dto.organization_type)
+            existing_logo = Logo(existing_org_dto.logo) if existing_org_dto.logo else None
+            existing_acl_id = ACLId(existing_org_dto.acl_id) if existing_org_dto.acl_id else None
             
+            # Reconstrói a entidade
             organization = Organization(
-                id=OrganizationId(existing_org_dto.id),
-                slug=Slug(existing_org_dto.slug),
-                name=OrganizationName(existing_org_dto.name),
-                organization_type=organization_type,
-                logo=Logo(existing_org_dto.logo) if existing_org_dto.logo else None,
-                acl_id=ACLId(existing_org_dto.acl_id) if existing_org_dto.acl_id else None,
+                id=existing_id,
+                slug=existing_slug,
+                name=existing_name,
+                organization_type=existing_type,
+                logo=existing_logo,
+                acl_id=existing_acl_id,
                 created_at=existing_org_dto.created_at,
                 updated_at=existing_org_dto.updated_at
             )
             
-            try:
-                new_name = OrganizationName(input_dto.name)
-                organization.update_name(new_name)
-            except ValueError as e:
-                return self._create_error_output([str(e)])
+            # Atualiza nome
+            new_name = OrganizationName(input_dto.name)
+            organization.update_name(new_name)
             
-            errors = self._get_errors(organization)
-            if errors:
-                return self._create_error_output(errors)
+            # Valida a entidade
+            if organization.get_validation_errors():
+                raise DomainException(organization.get_validation_errors())
             
-            success = self.repository.update_organization(organization)
+            # Persiste
+            success = await self._repository.update_organization(organization)
             
             if not success:
-                return self._create_error_output(["Falha ao atualizar nome da organização"])
+                raise DomainException(["Falha ao atualizar nome da organização"])
             
-            updated_org = self.repository.get_organization_by_id(org_id)
+            # Busca organização atualizada
+            updated_org = await self._repository.get_organization_by_id(org_id)
             
             return OrganizationOutputDTO(
                 success=True,
@@ -471,50 +532,63 @@ class UpdateOrganizationNameUseCase(UseCase[OrganizationRepository, UpdateOrgani
                 }
             )
             
+        except DomainException as e:
+            return OrganizationOutputDTO(
+                success=False,
+                errors=e.errors
+            )
         except Exception as e:
-            return self._create_error_output([f"Erro ao atualizar nome: {str(e)}"])
+            return OrganizationOutputDTO(
+                success=False,
+                errors=[f"Erro ao atualizar nome: {str(e)}"]
+            )
 
 class UpdateOrganizationTypeUseCase(UseCase[OrganizationRepository, UpdateOrganizationTypeInputDTO, OrganizationOutputDTO]):
     """Caso de uso para atualizar tipo de uma organização"""
     
     async def execute(self, input_dto: UpdateOrganizationTypeInputDTO) -> OrganizationOutputDTO:
-        organization_id = self._validate_uuid(input_dto.id, "ID da organização")
-        if not organization_id:
-            return self._create_error_output(["ID da organização inválido"])
-        
         try:
+            # Instancia ID e novo tipo
+            org_id = OrganizationId(input_dto.id)
             new_type = OrganizationType(input_dto.organization_type)
-        except ValueError:
-            return self._create_error_output([f"Tipo de organização inválido: {input_dto.organization_type}"])
-        
-        try:
-            org_id = OrganizationId(organization_id)
-            existing_org_dto = self.repository.get_organization_by_id(org_id)
+            
+            # Busca organização existente
+            existing_org_dto = await self._repository.get_organization_by_id(org_id)
             
             if not existing_org_dto:
-                return self._create_error_output(["Organização não encontrada"])
+                raise DomainException(["Organização não encontrada"])
             
+            # Instancia value objects da organização existente
+            existing_id = OrganizationId(existing_org_dto.id)
+            existing_slug = Slug(existing_org_dto.slug)
+            existing_name = OrganizationName(existing_org_dto.name)
+            existing_logo = Logo(existing_org_dto.logo) if existing_org_dto.logo else None
+            existing_acl_id = ACLId(existing_org_dto.acl_id) if existing_org_dto.acl_id else None
+            
+            # Reconstrói a entidade com novo tipo
             organization = Organization(
-                id=OrganizationId(existing_org_dto.id),
-                slug=Slug(existing_org_dto.slug),
-                name=OrganizationName(existing_org_dto.name),
+                id=existing_id,
+                slug=existing_slug,
+                name=existing_name,
                 organization_type=new_type,
-                logo=Logo(existing_org_dto.logo) if existing_org_dto.logo else None,
-                acl_id=ACLId(existing_org_dto.acl_id) if existing_org_dto.acl_id else None,
+                logo=existing_logo,
+                acl_id=existing_acl_id,
                 created_at=existing_org_dto.created_at,
                 updated_at=datetime.now()
             )
             
-            errors = self._get_errors(organization)
-            if errors:
-                return self._create_error_output(errors)
+            # Valida a entidade
+            if organization.get_validation_errors():
+                raise DomainException(organization.get_validation_errors())
             
-            success = self.repository.update_organization(organization)
+            # Persiste
+            success = await self._repository.update_organization(organization)
             
             if not success:
-                return self._create_error_output(["Falha ao atualizar tipo da organização"])
+                raise DomainException(["Falha ao atualizar tipo da organização"])
             
-            updated_org = self.repository.get_organization_by_id(org_id)
+            # Busca organização atualizada
+            updated_org = await self._repository.get_organization_by_id(org_id)
             
             return OrganizationOutputDTO(
                 success=True,
@@ -530,5 +604,13 @@ class UpdateOrganizationTypeUseCase(UseCase[OrganizationRepository, UpdateOrgani
                 }
             )
             
+        except DomainException as e:
+            return OrganizationOutputDTO(
+                success=False,
+                errors=e.errors
+            )
         except Exception as e:
-            return self._create_error_output([f"Erro ao atualizar tipo da organização: {str(e)}"])
+            return OrganizationOutputDTO(
+                success=False,
+                errors=[f"Erro ao atualizar tipo da organização: {str(e)}"]
+            )
